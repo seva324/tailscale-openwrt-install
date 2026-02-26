@@ -8,6 +8,9 @@ AUTHKEY="${1:-}"
 TAILSCALE_VERSION="1.94.2"
 INSTALL_DIR="/data/other/tailscale"
 
+# curl 选项
+CURL_OPTS="--connect-timeout 30 --max-time 300 -L"
+
 echo "=== Tailscale 一键安装脚本 ==="
 echo ""
 
@@ -43,32 +46,53 @@ case "$ARCH" in
         ;;
 esac
 
-echo "下载 Tailscale $TAILSCALE_VERSION..."
-curl -fsSL "https://pkgs.tailscale.com/stable/${DOWNLOAD_FILE}" -o /tmp/tailscale.tgz
+echo ""
+echo "[1/5] 下载 Tailscale ${TAILSCALE_VERSION}..."
+echo "      文件: ${DOWNLOAD_FILE}"
+echo "      大小: 约 32MB"
+echo ""
 
-echo "解压..."
+# 下载并显示进度
+curl ${CURL_OPTS} "https://pkgs.tailscale.com/stable/${DOWNLOAD_FILE}" -o /tmp/tailscale.tgz --progress-bar
+
+if [ $? -ne 0 ]; then
+    echo ""
+    echo "下载失败，尝试备用方法..."
+    # 尝试使用 http
+    curl ${CURL_OPTS} "http://pkgs.tailscale.com/stable/${DOWNLOAD_FILE}" -o /tmp/tailscale.tgz --progress-bar
+fi
+
+echo ""
+echo "[2/5] 解压..."
 cd /tmp
 rm -rf tailscale_${TAILSCALE_VERSION}*
 tar -xzf tailscale.tgz
+echo "      解压完成"
 
-echo "安装到 $INSTALL_DIR..."
+echo "[3/5] 安装到 $INSTALL_DIR..."
 mkdir -p "$INSTALL_DIR"
 cp tailscale_${TAILSCALE_VERSION}_*/tailscale "$INSTALL_DIR/"
 cp tailscale_${TAILSCALE_VERSION}_*/tailscaled "$INSTALL_DIR/"
 chmod +x "$INSTALL_DIR"/*
+echo "      安装完成"
 
-echo "启动 tailscaled..."
+echo "[4/5] 启动 tailscaled..."
 killall -9 tailscaled tailscale 2>/dev/null || true
 mkdir -p "$INSTALL_DIR/state"
 
 "$INSTALL_DIR/tailscaled" --tun=userspace-networking \
     --statedir="$INSTALL_DIR/state" \
-    --socket="$INSTALL_DIR/tailscaled.sock" &
+    --socket="$INSTALL_DIR/tailscaled.sock" > /tmp/tailscaled.log 2>&1 &
 
-echo "等待启动..."
+echo "      等待服务启动 (3秒)..."
 sleep 3
 
-echo "登录 Tailscale..."
+# 检查是否启动成功
+if ! "$INSTALL_DIR/tailscale" --socket="$INSTALL_DIR/tailscaled.sock" status >/dev/null 2>&1; then
+    echo "      警告: tailscaled 可能未正常启动，尝试继续..."
+fi
+
+echo "[5/5] 登录 Tailscale..."
 "$INSTALL_DIR/tailscale" --socket="$INSTALL_DIR/tailscaled.sock" up \
     --authkey="$AUTHKEY" \
     --operator=root
