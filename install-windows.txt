@@ -1,0 +1,46 @@
+# Windows 版 - Tailscale 安装脚本
+
+## 第1步：下载 Tailscale
+在 CMD 或 PowerShell 中执行：
+```cmd
+curl -L -o %TEMP%\tailscale.tgz https://pkgs.tailscale.com/stable/tailscale_1.94.2_arm64.tgz
+```
+
+## 第2步：复制到路由器
+```cmd
+scp %TEMP%\tailscale.tgz root@192.168.31.1:/tmp/
+```
+提示输入密码时，输入：admin
+
+## 第3步：SSH 登录路由器
+```cmd
+ssh root@192.168.31.1
+```
+提示输入密码时，输入：admin
+
+## 第4步：在路由器上安装
+登录后，在路由器命令行中依次执行：
+
+```bash
+cd /tmp && tar -xzf tailscale.tgz
+mkdir -p /data/other/tailscale
+cp tailscale_1.94.2_arm64/tailscale /data/other/tailscale/
+cp tailscale_1.94.2_arm64/tailscaled /data/other/tailscale/
+chmod +x /data/other/tailscale/*
+```
+
+## 第5步：启动 Tailscale
+```bash
+/data/other/tailscale/tailscaled --tun=userspace-networking --statedir=/data/other/tailscale/state --socket=/data/other/tailscale/tailscaled.sock &
+sleep 3
+/data/other/tailscale/tailscale --socket=/data/other/tailscale/tailscaled.sock up --authkey=tskey-auth-kDLkGkbib221CNTRL-z24MXHfDbdSPvDWHb1gacSjaueU7Dojs --operator=root
+/data/other/tailscale/tailscale --socket=/data/other/tailscale/tailscaled.sock status
+```
+
+## 开机自启
+如果需要开机自启，将以下内容添加到路由器启动脚本：
+```bash
+/data/other/tailscale/tailscaled --tun=userspace-networking --statedir=/data/other/tailscale/state --socket=/data/other/tailscale/tailscaled.sock &
+sleep 3
+/data/other/tailscale/tailscale --socket=/data/other/tailscale/tailscaled.sock up --authkey=tskey-auth-kDLkGkbib221CNTRL-z24MXHfDbdSPvDWHb1gacSjaueU7Dojs --operator=root
+```
