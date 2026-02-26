@@ -1,4 +1,4 @@
-# Windows 版 - Tailscale 安装脚本
+# Windows 版 - Tailscale 安装脚本（省空间版）
 
 ## 第1步：下载 Tailscale
 在 CMD 或 PowerShell 中执行：
@@ -6,9 +6,9 @@
 curl -L -o %TEMP%\tailscale.tgz https://pkgs.tailscale.com/stable/tailscale_1.94.2_arm64.tgz
 ```
 
-## 第2步：复制到路由器
+## 第2步：复制到路由器（直接存到数据目录）
 ```cmd
-scp %TEMP%\tailscale.tgz root@192.168.31.1:/tmp/
+scp %TEMP%\tailscale.tgz root@192.168.31.1:/data/other/tailscale.tgz
 ```
 提示输入密码时，输入：admin
 
@@ -18,15 +18,18 @@ ssh root@192.168.31.1
 ```
 提示输入密码时，输入：admin
 
-## 第4步：在路由器上安装
-登录后，在路由器命令行中依次执行：
+## 第4步：在路由器上直接解压安装
+登录后，在路由器命令行中执行：
 
 ```bash
-cd /tmp && tar -xzf tailscale.tgz
-mkdir -p /data/other/tailscale
-cp tailscale_1.94.2_arm64/tailscale /data/other/tailscale/
-cp tailscale_1.94.2_arm64/tailscaled /data/other/tailscale/
-chmod +x /data/other/tailscale/*
+cd /data/other
+rm -rf tailscale tailscale.tgz  # 清理旧文件
+tar -xzf tailscale.tgz          # 直接解压
+mkdir -p tailscale
+cp tailscale_1.94.2_arm64/tailscale tailscale/
+cp tailscale_1.94.2_arm64/tailscaled tailscale/
+chmod +x tailscale/tailscale tailscale/tailscaled
+rm -rf tailscale_1.94.2_arm64 tailscale.tgz  # 删除压缩包和临时文件，释放空间
 ```
 
 ## 第5步：启动 Tailscale
