@@ -8,8 +8,30 @@ AUTHKEY="${1:-}"
 TAILSCALE_VERSION="1.94.2"
 INSTALL_DIR="/data/other/tailscale"
 
-# curl 选项
-CURL_OPTS="--connect-timeout 30 --max-time 300 -L"
+# curl 选项 (兼容旧版本)
+CURL_OPTS="--connect-timeout 30 --max-time 300 -L --tlsv1.0 --tlsv1.1 --tlsv1.2 --tlsv1.3 -k"
+
+# 尝试不同的下载方式
+download_file() {
+    local url="$1"
+    local output="$2"
+
+    echo "尝试下载: $url"
+
+    # 方式1: 标准 HTTPS
+    curl --connect-timeout 30 --max-time 300 -L "$url" -o "$output" --progress-bar 2>/dev/null && return 0
+
+    # 方式2: 禁用 SSL 验证
+    echo "  尝试禁用 SSL 验证..."
+    curl --connect-timeout 30 --max-time 300 -Lk "$url" -o "$output" --progress-bar 2>/dev/null && return 0
+
+    # 方式3: 尝试 HTTP
+    echo "  尝试 HTTP..."
+    local http_url=$(echo "$url" | sed 's|https://|http://|')
+    curl --connect-timeout 30 --max-time 300 -L "$http_url" -o "$output" --progress-bar 2>/dev/null && return 0
+
+    return 1
+}
 
 echo "=== Tailscale 一键安装脚本 ==="
 echo ""
@@ -52,14 +74,12 @@ echo "      文件: ${DOWNLOAD_FILE}"
 echo "      大小: 约 32MB"
 echo ""
 
-# 下载并显示进度
-curl ${CURL_OPTS} "https://pkgs.tailscale.com/stable/${DOWNLOAD_FILE}" -o /tmp/tailscale.tgz --progress-bar
+# 下载 Tailscale
+download_file "https://pkgs.tailscale.com/stable/${DOWNLOAD_FILE}" /tmp/tailscale.tgz
 
 if [ $? -ne 0 ]; then
-    echo ""
-    echo "下载失败，尝试备用方法..."
-    # 尝试使用 http
-    curl ${CURL_OPTS} "http://pkgs.tailscale.com/stable/${DOWNLOAD_FILE}" -o /tmp/tailscale.tgz --progress-bar
+    echo "下载失败!"
+    exit 1
 fi
 
 echo ""
