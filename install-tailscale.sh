@@ -36,6 +36,40 @@ download_file() {
 echo "=== Tailscale 一键安装脚本 ==="
 echo ""
 
+# 检查并升级 curl
+CURL_VERSION=$(curl --version 2>/dev/null | head -1 | awk '{print $2}' | cut -d. -f1)
+echo "当前 curl 版本: $(curl --version 2>/dev/null | head -1)"
+if [ -z "$CURL_VERSION" ] || [ "$CURL_VERSION" -lt 8 ]; then
+    echo "curl 版本过低，尝试升级..."
+    # 尝试升级 curl
+    opkg update 2>/dev/null && opkg install curl 2>/dev/null || {
+        # 尝试下载新版 curl
+        echo "  尝试手动下载新版 curl..."
+        ARCH=$(uname -m)
+        case "$ARCH" in
+            aarch64|arm64)
+                CURL_pkg="curl-static-linux-arm64.tar.gz"
+                ;;
+            armv7l|armhf)
+                CURL_pkg="curl-static-linux-armv7.tar.gz"
+                ;;
+            x86_64)
+                CURL_pkg="curl-static-linux-x86_64.tar.gz"
+                ;;
+            *)
+                echo "  无法自动升级 curl，请手动升级后重试"
+                ;;
+        esac
+        if [ -n "$CURL_pkg" ]; then
+            curl -k -o /tmp/curl.tar.gz "https://github.com/mopar8/curl-static-binaries/raw/master/${CURL_pkg}" 2>/dev/null && \
+            tar -xzf /tmp/curl.tar.gz -C /tmp/ && \
+            cp /tmp/curl /usr/bin/curl && chmod +x /usr/bin/curl && \
+            echo "  curl 升级成功: $(curl --version | head -1)"
+        fi
+    }
+fi
+echo ""
+
 # 检查参数
 if [ -z "$AUTHKEY" ]; then
     echo "用法: curl -fsSL https://raw.githubusercontent.com/seva324/tailscale-openwrt-install/main/install-tailscale.sh | sh -s -- 你的authkey"
