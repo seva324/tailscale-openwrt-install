@@ -1,6 +1,6 @@
 #!/bin/sh
 # Tailscale 一键安装脚本 - 小米路由器/OpenWrt
-# 使用方法: curl -fsSL https://raw.githubusercontent.com/seva324/dota2-hub/main/install-tailscale.sh | sh -s -- 你的authkey
+# 使用方法: curl -fsSL https://raw.githubusercontent.com/seva324/tailscale-openwrt-install/main/install-tailscale.sh | sh -s -- 你的authkey
 
 set -e
 
@@ -13,7 +13,7 @@ echo ""
 
 # 检查参数
 if [ -z "$AUTHKEY" ]; then
-    echo "用法: curl -fsSL https://raw.githubusercontent.com/seva324/dota2-hub/main/install-tailscale.sh | sh -s -- 你的authkey"
+    echo "用法: curl -fsSL https://raw.githubusercontent.com/seva324/tailscale-openwrt-install/main/install-tailscale.sh | sh -s -- 你的authkey"
     echo ""
     echo "获取 authkey: https://login.tailscale.com/admin/settings/keys"
     exit 1
