@@ -1,4 +1,4 @@
-# Windows 版 - Tailscale 安装脚本（省空间版）
+# Windows 版 - Tailscale 安装脚本（内存模式，省空间）
 
 ## 第1步：下载 Tailscale
 在 CMD 或 PowerShell 中执行：
@@ -6,9 +6,9 @@
 curl -L -o %TEMP%\tailscale.tgz https://pkgs.tailscale.com/stable/tailscale_1.94.2_arm64.tgz
 ```
 
-## 第2步：复制到路由器（直接存到数据目录）
+## 第2步：复制到路由器（存到 /tmp）
 ```cmd
-scp %TEMP%\tailscale.tgz root@192.168.31.1:/data/other/tailscale.tgz
+scp %TEMP%\tailscale.tgz root@192.168.31.1:/tmp/
 ```
 提示输入密码时，输入：admin
 
@@ -18,32 +18,43 @@ ssh root@192.168.31.1
 ```
 提示输入密码时，输入：admin
 
-## 第4步：在路由器上直接解压安装
+## 第4步：在路由器上安装（到内存模式）
 登录后，在路由器命令行中执行：
 
 ```bash
-cd /data/other
-rm -rf tailscale tailscale.tgz  # 清理旧文件
-tar -xzf tailscale.tgz          # 直接解压
-mkdir -p tailscale
-cp tailscale_1.94.2_arm64/tailscale tailscale/
-cp tailscale_1.94.2_arm64/tailscaled tailscale/
-chmod +x tailscale/tailscale tailscale/tailscaled
-rm -rf tailscale_1.94.2_arm64 tailscale.tgz  # 删除压缩包和临时文件，释放空间
+cd /tmp
+rm -rf tailscale_1.94.2_arm64 tailscale.tgz
+tar -xzf tailscale.tgz
+chmod +x tailscale_1.94.2_arm64/tailscaled
+mv tailscale_1.94.2_arm64/tailscaled /tmp/tailscaled
+rm -rf tailscale_1.94.2_arm64 tailscale.tgz
+# 创建符号链接，直接用 tailscale 命令
+ln -sf /tmp/tailscaled /usr/bin/tailscaled
+ln -sf /tmp/tailscaled /usr/bin/tailscale
 ```
 
 ## 第5步：启动 Tailscale
 ```bash
-/data/other/tailscale/tailscaled --tun=userspace-networking --statedir=/data/other/tailscale/state --socket=/data/other/tailscale/tailscaled.sock &
+# 启动 tailscaled
+tailscaled --tun=userspace-networking --state-dir=/tmp/tailscale-state &
 sleep 3
-/data/other/tailscale/tailscale --socket=/data/other/tailscale/tailscaled.sock up --authkey=tskey-auth-kDLkGkbib221CNTRL-z24MXHfDbdSPvDWHb1gacSjaueU7Dojs --operator=root
-/data/other/tailscale/tailscale --socket=/data/other/tailscale/tailscaled.sock status
+# 登录
+tailscale up --authkey=tskey-auth-kDLkGkbib221CNTRL-z24MXHfDbdSPvDWHb1gacSjaueU7Dojs --operator=root
+# 查看状态
+tailscale status
 ```
 
 ## 开机自启
 如果需要开机自启，将以下内容添加到路由器启动脚本：
 ```bash
-/data/other/tailscale/tailscaled --tun=userspace-networking --statedir=/data/other/tailscale/state --socket=/data/other/tailscale/tailscaled.sock &
+# 启动 tailscaled
+tailscaled --tun=userspace-networking --state-dir=/tmp/tailscale-state &
 sleep 3
-/data/other/tailscale/tailscale --socket=/data/other/tailscale/tailscaled.sock up --authkey=tskey-auth-kDLkGkbib221CNTRL-z24MXHfDbdSPvDWHb1gacSjaueU7Dojs --operator=root
+# 登录
+tailscale up --authkey=tskey-auth-kDLkGkbib221CNTRL-z24MXHfDbdSPvDWHb1gacSjaueU7Dojs --operator=root
 ```
+
+## 优点
+- 使用内存模式，重启后需要重新安装
+- 不占用路由器存储空间
+- 可以直接用 `tailscale` 命令，不用每次指定路径
