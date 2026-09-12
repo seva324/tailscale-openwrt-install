@@ -137,6 +137,7 @@ if [ "$MODE" = "rollback" ]; then
     [ -f "$BACKUP_ROOT/ShellCrash.cfg" ] && cp -f "$BACKUP_ROOT/ShellCrash.cfg" "$CFG"
     [ -f "$BACKUP_ROOT/gateway.cfg" ] && cp -f "$BACKUP_ROOT/gateway.cfg" "$CRASHDIR/configs/gateway.cfg"
     [ -d "$BACKUP_ROOT/ys" ] && rm -rf "$CRASHDIR/jsons" && cp -rf "$BACKUP_ROOT/ys" "$CRASHDIR/jsons"
+    [ -f "$BACKUP_ROOT/command.env" ] && cp -f "$BACKUP_ROOT/command.env" "$CRASHDIR/configs/command.env"
     [ -f "$BACKUP_ROOT/core" ] && { rm -f "$BINDIR"/CrashCore.*; cp -f "$BACKUP_ROOT/core" "$BINDIR/$(basename "$BACKUP_ROOT/core")"; }
     /etc/init.d/shellcrash start 2>/dev/null || "$CRASHDIR"/start.sh start 2>/dev/null
     ok "回滚完成。建议手动确认：sh $0 --status"
@@ -379,6 +380,7 @@ cp -f "$CFG" "$BACKUP_ROOT/ShellCrash.cfg"
 [ -f "$CRASHDIR/configs/gateway.cfg" ] && cp -f "$CRASHDIR/configs/gateway.cfg" "$BACKUP_ROOT/gateway.cfg"
 [ -d "$CRASHDIR/jsons" ] && rm -rf "$BACKUP_ROOT/ys" && cp -rf "$CRASHDIR/jsons" "$BACKUP_ROOT/ys"
 [ -f "$BINDIR/CrashCore.raw" ] && cp -f "$BINDIR/CrashCore.raw" "$BACKUP_ROOT/core"
+[ -f "$CRASHDIR/configs/command.env" ] && cp -f "$CRASHDIR/configs/command.env" "$BACKUP_ROOT/command.env"
 ok "已备份到 $BACKUP_ROOT（回滚: sh $0 --rollback）"
 
 # ---- 停服务体面一点：先停服务再换内核 ----
@@ -393,6 +395,19 @@ cp -f "$SB_GZ" "$BINDIR/CrashCore.gz"
 rm -f "$TMPDIR_SC/CrashCore"
 ok "内核已就位: $BINDIR/CrashCore.gz"
 
+# ---- 更新启动命令（关键）----
+# command.env 里默认是 mihomo 的参数（-d BINDIR -f config.yaml）。
+# sing-box 必须用 run -D BINDIR -C TMPDIR/jsons，否则二进制会被套错参数启动而崩溃。
+info "更新内核启动命令..."
+CMDENV="$CRASHDIR/configs/command.env"
+[ -f "$CMDENV" ] || : > "$CMDENV"
+if grep -q '^COMMAND=' "$CMDENV" 2>/dev/null; then
+    sed -i 's|^COMMAND=.*|COMMAND="$TMPDIR/CrashCore run -D $BINDIR -C $TMPDIR/jsons"|' "$CMDENV"
+else
+    printf 'COMMAND="$TMPDIR/CrashCore run -D $BINDIR -C $TMPDIR/jsons"\n' >> "$CMDENV"
+fi
+ok "启动命令: $(grep '^COMMAND=' "$CMDENV")"
+
 # ---- 写 ShellCrash 配置 ----
 info "写入配置..."
 setcfg() { # $1=key $2=value $3=file
@@ -406,6 +421,20 @@ setcfg() { # $1=key $2=value $3=file
 setcfg crashcore singbox
 setcfg core_v "$computed_ver"
 setcfg ts_service ON
+
+# ---- dns_mod 必须避开 mix/route（关键）----
+# ShellCrash 的 sing-box 配置生成器在 dns_mod=mix 或 route 时会生成一个远程 rule_set
+# （cn.srs），并把它的 http_client 指向一个"空配置的 direct 出站"。
+# sing-box 1.14 起会直接拒绝启动：
+#   FATAL initialize rule-set[0]: cn: ... detour to an empty direct outbound makes no sense
+# 改为 fake-ip 后该 rule_set 不再生成（fake_ip_filter 过滤仍然生效），已实测可正常启动。
+_old_dns_mod=$(getcfg dns_mod)
+case "$_old_dns_mod" in
+    mix|route)
+        setcfg dns_mod fake-ip
+        ok "dns_mod: $_old_dns_mod -> fake-ip（规避 sing-box 1.14 的 rule_set 校验）"
+        ;;
+esac
 
 # gateway.cfg（ShellCrash 7-6 菜单的存储位置）
 GW="$CRASHDIR/configs/gateway.cfg"
@@ -463,6 +492,17 @@ sleep 8
 
 if [ -n "$(pidof CrashCore 2>/dev/null)" ]; then
     ok "CrashCore 已运行"
+    # 代理自检：避免"服务报已启动但内核实际已死"的假象
+    if command -v curl >/dev/null 2>&1; then
+        code=$(curl -s -o /dev/null --max-time 15 -x "http://127.0.0.1:$mix_port" \
+               https://www.google.com/generate_204 2>/dev/null)
+        if [ "$code" = "204" ]; then
+            ok "代理自检通过 (HTTP 204)"
+        else
+            warn "代理自检返回 HTTP=${code:-无响应}（可能是节点本身不通，也可能是内核已退出）"
+            warn "确认内核状态： pidof CrashCore"
+        fi
+    fi
 else
     err "CrashCore 未能启动！"
     err "请查看日志：$TMPDIR_SC/ShellCrash.log"
