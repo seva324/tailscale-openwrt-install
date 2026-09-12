@@ -80,12 +80,18 @@ die()  { err "$*"; exit 1; }
 
 # ---------------- 定位 ShellCrash ----------------
 find_crashdir() {
-    for d in /data/other_vol/ShellCrash /data/other/ShellCrash /etc/ShellCrash \
-             /usr/share/ShellCrash /root/.config/ShellCrash; do
+    for d in /data/other_vol/ShellCrash /data/other/ShellCrash /data/ShellCrash \
+             /etc/ShellCrash /usr/share/ShellCrash /root/.config/ShellCrash \
+             /extdisks/sda1/ShellCrash /mnt/sda1/ShellCrash; do
         if [ -f "$d/configs/ShellCrash.cfg" ]; then
             printf '%s\n' "$d"; return 0
         fi
     done
+    # 兜底：全盘找一个 configs/ShellCrash.cfg
+    _hit=$(find /data /tmp /etc /usr/share -maxdepth 4 -name ShellCrash.cfg -path '*/configs/*' 2>/dev/null | head -1)
+    if [ -n "$_hit" ]; then
+        printf '%s\n' "$(dirname "$(dirname "$_hit")")"; return 0
+    fi
     return 1
 }
 
