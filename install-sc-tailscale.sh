@@ -179,12 +179,12 @@ if [ "$LIBC" = "musl" ]; then SB_FLAVOR="musl"; else SB_FLAVOR="glibc"; fi
 info "架构: $ARCH  ->  sing-box linux-$SB_ARCH-$SB_FLAVOR"
 
 # ---- 2. 空间检查 ----
-# 峰值占用 = 压缩包(28MB) + 解压后的裸二进制(86MB) + 重新压缩的CrashCore.gz(28MB) ≈ 145MB
-need_kb=160000
+# 峰值占用：下载包 + 解压后的裸二进制（最小版 .gz 约 18MB→45MB；官方 tar.gz 28MB→86MB）
+need_kb=102400     # 100MB：够最小版流程；官方 tar.gz 流程会在解压前再精确校验一次
 tmp_avail=$(df -P "$TMPDIR_SC" 2>/dev/null | awk 'NR==2{print $4}')
 case "$tmp_avail" in ''|*[!0-9]*) tmp_avail=$(df -P /tmp 2>/dev/null | awk 'NR==2{print $4}') ;; esac
 case "$tmp_avail" in ''|*[!0-9]*) tmp_avail=0 ;; esac
-[ "$tmp_avail" -lt "$need_kb" ] && die "临时目录空间不足：需要约 $((need_kb/1024))MB，实际 $((tmp_avail/1024))MB"
+[ "$tmp_avail" -lt "$need_kb" ] && die "临时目录空间不足：需要约 $((need_kb/1024))MB，实际 $((tmp_avail/1024))MB（可清理 $TMPDIR_SC 下的旧文件）"
 
 bindir_avail=$(df -P "$BINDIR" 2>/dev/null | awk 'NR==2{print $4}')
 case "$bindir_avail" in ''|*[!0-9]*) bindir_avail=0 ;; esac
@@ -293,6 +293,11 @@ fi
 [ -s "$SB_TGZ" ] || die "内核包为空或不存在"
 
 info "解压并校验..."
+_src_kb=$(( $(wc -c < "$SB_TGZ") / 1024 ))
+_need_kb=$(( _src_kb * 3 ))          # 解压后裸二进制约为压缩包的 2-3 倍
+_have_kb=$(df -P "$TMPDIR_SC" 2>/dev/null | awk 'NR==2{print $4}')
+case "$_have_kb" in ''|*[!0-9]*) _have_kb=0 ;; esac
+[ "$_have_kb" -lt "$_need_kb" ] && die "解压空间不足：需要约 $((_need_kb/1024))MB，实际 $((_have_kb/1024))MB"
 rm -rf "$WORKDIR/x" && mkdir -p "$WORKDIR/x"
 SRC_IS_GZ=0
 case "$SB_TGZ" in
