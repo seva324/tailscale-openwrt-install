@@ -21,6 +21,8 @@ set -u
 SB_VERSION="1.14.0"
 BACKUP_ROOT="/tmp/sc-ts-backup"
 WORKDIR="/tmp/sc-ts-install"
+# 仓库里预编译的最小版内核（由 .github/workflows/build-minimal-singbox.yml 产出）
+MINIMAL_BASE="https://raw.githubusercontent.com/seva324/tailscale-openwrt-install/main/core"
 
 # ---------------- 参数 ----------------
 AUTH_KEY=""
@@ -255,39 +257,49 @@ if [ -n "$CORE_FILE" ]; then
 elif [ -s "$SB_TGZ" ]; then
     info "复用已下载的内核包"
 else
+    # 候选地址：优先仓库里预编译的最小版（约为官方版 2/3 体积，省闪存也省内存），
+    # 拉不到再退回官方 release。
+    MIN_URL="$MINIMAL_BASE/sing-box-min-${SB_ARCH}.gz"
+    OFFICIAL_URL="https://github.com/SagerNet/sing-box/releases/download/v${SB_VERSION}/${TARBALL}"
     if [ -n "$CORE_URL" ]; then
-        URL="$CORE_URL"
+        CANDIDATES="$CORE_URL"
     else
-        URL="https://github.com/SagerNet/sing-box/releases/download/v${SB_VERSION}/${TARBALL}"
+        CANDIDATES="$MIN_URL $OFFICIAL_URL"
     fi
-    info "下载 sing-box ${SB_VERSION} ..."
-    info "  地址: $URL"
+    info "下载内核 ..."
     dl_ok=0
-    # 方式1: 走本机代理（ShellCrash 自身代理，国内最可靠）
-    if command -v curl >/dev/null 2>&1; then
-        if curl -sL --max-time 180 -x "http://127.0.0.1:${mix_port}" -o "$SB_TGZ" "$URL" 2>/dev/null; then
-            dl_ok=1; ok "  经本机代理下载成功"
+    for URL in $CANDIDATES; do
+        info "  尝试: $URL"
+        if command -v curl >/dev/null 2>&1; then
+            # 方式1: 走本机代理（ShellCrash 自身代理，国内最可靠）
+            curl -sL --max-time 240 -x "http://127.0.0.1:${mix_port}" -o "$SB_TGZ" "$URL" 2>/dev/null
+            _sz=$(wc -c < "$SB_TGZ" 2>/dev/null || echo 0)
+            if [ "${_sz:-0}" -gt 5000000 ]; then dl_ok=1; ok "  经本机代理下载成功"; break; fi
+            # 方式2: 直连
+            curl -sL --max-time 300 -o "$SB_TGZ" "$URL" 2>/dev/null
+            _sz=$(wc -c < "$SB_TGZ" 2>/dev/null || echo 0)
+            if [ "${_sz:-0}" -gt 5000000 ]; then dl_ok=1; ok "  直连下载成功"; break; fi
         fi
-        if [ "$dl_ok" = 0 ]; then
-            warn "  本机代理失败，尝试直连..."
-            if curl -sL --max-time 240 -o "$SB_TGZ" "$URL" 2>/dev/null; then
-                dl_ok=1; ok "  直连下载成功"
-            fi
+        if command -v wget >/dev/null 2>&1; then
+            wget -q --timeout=240 -O "$SB_TGZ" "$URL" 2>/dev/null
+            _sz=$(wc -c < "$SB_TGZ" 2>/dev/null || echo 0)
+            if [ "${_sz:-0}" -gt 5000000 ]; then dl_ok=1; ok "  wget 下载成功"; break; fi
         fi
-    fi
-    # 方式2: wget
-    if [ "$dl_ok" = 0 ] && command -v wget >/dev/null 2>&1; then
-        warn "  curl 失败，尝试 wget..."
-        wget -q --timeout=180 -O "$SB_TGZ" "$URL" 2>/dev/null && dl_ok=1 && ok "  wget 下载成功"
-    fi
-    [ "$dl_ok" = 1 ] || die "内核下载失败。可手动下载后 scp 到路由器，再用 --core-file 指定"
+        warn "  该地址失败或返回内容过小"
+    done
+    [ "$dl_ok" = 1 ] || die "内核下载失败。可手动下载后放入路由器，再用 --core-file 指定"
 fi
 
 [ -s "$SB_TGZ" ] || die "内核包为空或不存在"
 
 info "解压并校验..."
 rm -rf "$WORKDIR/x" && mkdir -p "$WORKDIR/x"
-tar -xzf "$SB_TGZ" -C "$WORKDIR/x" || die "解压失败（文件可能损坏）"
+SRC_IS_GZ=0
+case "$SB_TGZ" in
+    *.tar.gz|*.tgz) tar -xzf "$SB_TGZ" -C "$WORKDIR/x" || die "解压失败（文件可能损坏）" ;;
+    *.gz)           gunzip -c "$SB_TGZ" > "$WORKDIR/x/sing-box" || die "解压失败（文件可能损坏）"; SRC_IS_GZ=1 ;;
+    *)              die "无法识别的内核包格式: $SB_TGZ（需 .tar.gz 或 .gz）" ;;
+esac
 SB_BIN=$(find "$WORKDIR/x" -name sing-box -type f 2>/dev/null | head -1)
 [ -n "$SB_BIN" ] || die "解压后找不到 sing-box 二进制"
 
@@ -301,10 +313,14 @@ ok "内核可用：sing-box $computed_ver（含 with_tailscale）"
 
 # ---- 7. 压缩 ----
 SB_GZ="$WORKDIR/CrashCore.gz"
-if [ -s "$SB_GZ" ] && [ "$SB_GZ" -nt "$SB_TGZ" ]; then
+if [ "$SRC_IS_GZ" = 1 ]; then
+    # 源文件本身就是 gzip 过的二进制，直接复用，省一次压缩
+    info "复用已压缩的内核（源包即 .gz）"
+    cp -f "$SB_TGZ" "$SB_GZ" || die "复制内核失败"
+elif [ -s "$SB_GZ" ] && [ "$SB_GZ" -nt "$SB_TGZ" ]; then
     info "复用已压缩的内核"
 else
-    info "压缩内核（约 28MB，视 CPU 需 10-60 秒）..."
+    info "压缩内核（视 CPU 需 10-60 秒）..."
     gzip -c "$SB_BIN" > "$SB_GZ" || die "压缩失败"
 fi
 new_gz_size=$(wc -c < "$SB_GZ")
