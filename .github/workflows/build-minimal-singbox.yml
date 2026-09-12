@@ -3,7 +3,8 @@ name: build-minimal-singbox
 # 为空间紧张的路由器编译"够用就好"的 sing-box：
 #   保留 gvisor(tun) / tailscale(endpoint) / clash_api / quic / utls(reality) / wireguard
 #   砍掉 naive(CGO+cronet，体积大头) / openvpn / openconnect / usbip / cloudflared / ccm / ocm
-# 产物 gzip 后提交回仓库，方便用 jsDelivr 拉取（github.com 的 release 在国内常不可达）。
+# 产物 gzip 后提交回仓库，方便用 raw.githubusercontent.com / jsDelivr 拉取
+# （github.com 的 release 下载在国内常不可达）。
 
 on:
   workflow_dispatch:
@@ -55,11 +56,29 @@ jobs:
             -ldflags "-s -w -checklinkname=0" \
             -o ../sing-box-min ./cmd/sing-box
 
-      - name: Verify tags actually include tailscale
+      - name: Report raw size
+        run: ls -l sing-box-min && du -h sing-box-min
+
+      # 交叉编译出来的二进制在本机跑不了（Exec format error），用 QEMU 跑
+      - uses: docker/setup-qemu-action@v3
+
+      - name: Map arch -> docker platform
+        id: plat
+        run: |
+          case "${{ inputs.goarch }}" in
+            arm64) echo "p=linux/arm64"   >> "$GITHUB_OUTPUT" ;;
+            armv7) echo "p=linux/arm/v7"  >> "$GITHUB_OUTPUT" ;;
+            amd64) echo "p=linux/amd64"   >> "$GITHUB_OUTPUT" ;;
+            386)   echo "p=linux/386"     >> "$GITHUB_OUTPUT" ;;
+            *)     echo "p=linux/${{ inputs.goarch }}" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Verify it runs and really includes tailscale
         run: |
           set -eux
           chmod +x sing-box-min
-          ./sing-box-min version | tee version.txt
+          docker run --rm --platform "${{ steps.plat.outputs.p }}" \
+            -v "$PWD:/w" -w /w alpine:3.20 ./sing-box-min version | tee version.txt
           grep -q 'with_tailscale' version.txt
           grep -q 'with_gvisor' version.txt
 
@@ -67,7 +86,7 @@ jobs:
         run: |
           set -eux
           gzip -9 -c sing-box-min > sing-box-min-${{ inputs.goarch }}.gz
-          ls -l sing-box-min sing-box-min-${{ inputs.goarch }}.gz
+          ls -l sing-box-min-${{ inputs.goarch }}.gz
           {
             echo "### minimal sing-box ${{ inputs.version }} (${{ inputs.goarch }})"
             echo ""
