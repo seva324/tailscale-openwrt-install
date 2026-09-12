@@ -1,0 +1,105 @@
+name: build-minimal-singbox
+
+# 为空间紧张的路由器编译"够用就好"的 sing-box：
+#   保留 gvisor(tun) / tailscale(endpoint) / clash_api / quic / utls(reality) / wireguard
+#   砍掉 naive(CGO+cronet，体积大头) / openvpn / openconnect / usbip / cloudflared / ccm / ocm
+# 产物 gzip 后提交回仓库，方便用 jsDelivr 拉取（github.com 的 release 在国内常不可达）。
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'sing-box version (tag, 如 v1.14.0)'
+        required: true
+        default: 'v1.14.0'
+      goarch:
+        description: '目标架构 (arm64 / amd64 / armv7)'
+        required: true
+        default: 'arm64'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+          cache: false
+
+      - name: Show toolchain
+        run: go version
+
+      - name: Clone sing-box ${{ inputs.version }}
+        run: |
+          set -eux
+          git clone --depth 1 --branch "${{ inputs.version }}" \
+            https://github.com/SagerNet/sing-box.git src
+          cd src
+          git log -1 --oneline
+
+      - name: Build (CGO off, minimal tags)
+        working-directory: src
+        env:
+          CGO_ENABLED: '0'
+          GOOS: linux
+          GOARCH: ${{ inputs.goarch }}
+        run: |
+          set -eux
+          go build -trimpath \
+            -tags "with_gvisor with_quic with_utls with_wireguard with_clash_api with_tailscale badlinkname tfogo_checklinkname0" \
+            -ldflags "-s -w -checklinkname=0" \
+            -o ../sing-box-min ./cmd/sing-box
+
+      - name: Verify tags actually include tailscale
+        run: |
+          set -eux
+          chmod +x sing-box-min
+          ./sing-box-min version | tee version.txt
+          grep -q 'with_tailscale' version.txt
+          grep -q 'with_gvisor' version.txt
+
+      - name: Package
+        run: |
+          set -eux
+          gzip -9 -c sing-box-min > sing-box-min-${{ inputs.goarch }}.gz
+          ls -l sing-box-min sing-box-min-${{ inputs.goarch }}.gz
+          {
+            echo "### minimal sing-box ${{ inputs.version }} (${{ inputs.goarch }})"
+            echo ""
+            echo "| 文件 | 大小 |"
+            echo "|---|---|"
+            echo "| 裸二进制 | $(du -h sing-box-min | cut -f1) |"
+            echo "| gzip | $(du -h sing-box-min-${{ inputs.goarch }}.gz | cut -f1) |"
+            echo ""
+            echo '```'
+            cat version.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sing-box-min-${{ inputs.goarch }}
+          path: |
+            sing-box-min-${{ inputs.goarch }}.gz
+            version.txt
+
+      - name: Commit the .gz back into the repo
+        run: |
+          set -eux
+          mkdir -p core
+          cp sing-box-min-${{ inputs.goarch }}.gz core/
+          cp version.txt core/version-${{ inputs.goarch }}.txt
+          git config user.name  'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add core/
+          if git diff --cached --quiet; then
+            echo "no change"
+          else
+            git commit -m "core: build minimal sing-box ${{ inputs.version }} (${{ inputs.goarch }})"
+            git push
+          fi
