@@ -253,9 +253,16 @@ TARBALL="sing-box-${SB_VERSION}-linux-${SB_ARCH}-${SB_FLAVOR}.tar.gz"
 if [ -n "$CORE_FILE" ]; then
     [ -f "$CORE_FILE" ] || die "指定的内核文件不存在: $CORE_FILE"
     cp -f "$CORE_FILE" "$SB_TGZ"
-    info "使用本地内核包: $CORE_FILE"
+    case "$CORE_FILE" in
+        *.tar.gz|*.tgz) SRC_KIND="tar.gz" ;;
+        *.gz)           SRC_KIND="gz" ;;
+        *)              SRC_KIND="tar.gz" ;;
+    esac
+    printf '%s\n' "$SRC_KIND" > "$WORKDIR/.srckind"
+    info "使用本地内核包: $CORE_FILE（格式: $SRC_KIND）"
 elif [ -s "$SB_TGZ" ]; then
-    info "复用已下载的内核包"
+    SRC_KIND=$(cat "$WORKDIR/.srckind" 2>/dev/null || echo tar.gz)
+    info "复用已下载的内核包（格式: $SRC_KIND）"
 else
     # 候选地址：优先仓库里预编译的最小版（约为官方版 2/3 体积，省闪存也省内存），
     # 拉不到再退回官方 release。
@@ -269,41 +276,48 @@ else
     info "下载内核 ..."
     dl_ok=0
     for URL in $CANDIDATES; do
+        # 包格式必须按「源地址」判断，不能按本地临时文件名（本地固定叫 sb.tgz）
+        case "$URL" in
+            *.tar.gz|*.tgz) SRC_KIND="tar.gz" ;;
+            *.gz)           SRC_KIND="gz" ;;
+            *)              SRC_KIND="tar.gz" ;;
+        esac
         info "  尝试: $URL"
         if command -v curl >/dev/null 2>&1; then
             # 方式1: 走本机代理（ShellCrash 自身代理，国内最可靠）
             curl -sL --max-time 240 -x "http://127.0.0.1:${mix_port}" -o "$SB_TGZ" "$URL" 2>/dev/null
-            _sz=$(wc -c < "$SB_TGZ" 2>/dev/null || echo 0)
+            _sz=$(wc -c "$SB_TGZ" 2>/dev/null | awk '{print $1}')
             if [ "${_sz:-0}" -gt 5000000 ]; then dl_ok=1; ok "  经本机代理下载成功"; break; fi
             # 方式2: 直连
             curl -sL --max-time 300 -o "$SB_TGZ" "$URL" 2>/dev/null
-            _sz=$(wc -c < "$SB_TGZ" 2>/dev/null || echo 0)
+            _sz=$(wc -c "$SB_TGZ" 2>/dev/null | awk '{print $1}')
             if [ "${_sz:-0}" -gt 5000000 ]; then dl_ok=1; ok "  直连下载成功"; break; fi
         fi
         if command -v wget >/dev/null 2>&1; then
             wget -q --timeout=240 -O "$SB_TGZ" "$URL" 2>/dev/null
-            _sz=$(wc -c < "$SB_TGZ" 2>/dev/null || echo 0)
+            _sz=$(wc -c "$SB_TGZ" 2>/dev/null | awk '{print $1}')
             if [ "${_sz:-0}" -gt 5000000 ]; then dl_ok=1; ok "  wget 下载成功"; break; fi
         fi
         warn "  该地址失败或返回内容过小"
     done
     [ "$dl_ok" = 1 ] || die "内核下载失败。可手动下载后放入路由器，再用 --core-file 指定"
+    printf '%s\n' "$SRC_KIND" > "$WORKDIR/.srckind"
 fi
 
 [ -s "$SB_TGZ" ] || die "内核包为空或不存在"
 
 info "解压并校验..."
-_src_kb=$(( $(wc -c < "$SB_TGZ") / 1024 ))
-_need_kb=$(( _src_kb * 3 ))          # 解压后裸二进制约为压缩包的 2-3 倍
+_src_kb=$(( $(wc -c "$SB_TGZ" 2>/dev/null | awk '{print $1}') / 1024 ))
+_need_kb=$(( _src_kb * 4 ))          # 实测最小版 19MB->55MB；保留 4 倍余量
 _have_kb=$(df -P "$TMPDIR_SC" 2>/dev/null | awk 'NR==2{print $4}')
 case "$_have_kb" in ''|*[!0-9]*) _have_kb=0 ;; esac
 [ "$_have_kb" -lt "$_need_kb" ] && die "解压空间不足：需要约 $((_need_kb/1024))MB，实际 $((_have_kb/1024))MB"
 rm -rf "$WORKDIR/x" && mkdir -p "$WORKDIR/x"
 SRC_IS_GZ=0
-case "$SB_TGZ" in
-    *.tar.gz|*.tgz) tar -xzf "$SB_TGZ" -C "$WORKDIR/x" || die "解压失败（文件可能损坏）" ;;
-    *.gz)           gunzip -c "$SB_TGZ" > "$WORKDIR/x/sing-box" || die "解压失败（文件可能损坏）"; SRC_IS_GZ=1 ;;
-    *)              die "无法识别的内核包格式: $SB_TGZ（需 .tar.gz 或 .gz）" ;;
+case "$SRC_KIND" in
+    tar.gz) tar -xzf "$SB_TGZ" -C "$WORKDIR/x" || die "解压失败（文件可能损坏）" ;;
+    gz)     gunzip -c "$SB_TGZ" > "$WORKDIR/x/sing-box" || die "解压失败（文件可能损坏）"; SRC_IS_GZ=1 ;;
+    *)      die "无法识别的内核包格式: ${SRC_KIND:-未知}（需 .tar.gz 或 .gz）" ;;
 esac
 SB_BIN=$(find "$WORKDIR/x" -name sing-box -type f 2>/dev/null | head -1)
 [ -n "$SB_BIN" ] || die "解压后找不到 sing-box 二进制"
