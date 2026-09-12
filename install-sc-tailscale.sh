@@ -201,6 +201,17 @@ fi
 
 # ---- 4. 参数收集（交互式） ----
 if [ "$MODE" = "apply" ] || [ "$MODE" = "preflight" ]; then
+    # 升级场景：优先复用 gateway.cfg 里已有的值，没有再交互询问
+    _gw="$CRASHDIR/configs/gateway.cfg"
+    if [ -z "$AUTH_KEY" ] && [ -f "$_gw" ]; then
+        AUTH_KEY=$(sed -n 's/^ts_auth_key=//p' "$_gw" 2>/dev/null | head -1)
+        [ -n "$AUTH_KEY" ] && info "复用 gateway.cfg 中已有的 auth key"
+    fi
+    if [ -z "$HOSTNAME_ARG" ] && [ -f "$_gw" ]; then
+        HOSTNAME_ARG=$(sed -n 's/^ts_hostname=//p' "$_gw" 2>/dev/null | head -1)
+        [ -n "$HOSTNAME_ARG" ] && info "复用 gateway.cfg 中已有的节点名: $HOSTNAME_ARG"
+    fi
+
     if [ -z "$AUTH_KEY" ] && [ "$MODE" = "apply" ]; then
         say "获取 auth key: https://login.tailscale.com/admin/settings/keys"
         say "（建议 Reusable + 关闭 Ephemeral + Expiry 设为 Never）"
@@ -299,8 +310,23 @@ fi
 new_gz_size=$(wc -c < "$SB_GZ")
 info "压缩后大小: $((new_gz_size/1024/1024))MB"
 
-if [ "$old_core_size" -gt 0 ] && [ "$new_gz_size" -gt "$old_core_size" ] && [ "$bindir_avail" -lt 2048 ]; then
-    die "闪存空间不足：新内核压缩后 ${new_gz_size}B 大于旧内核 ${old_core_size}B，且内核目录几乎没有余量"
+# ---- 闪存装不下就降级到"小闪存模式" ----
+# ShellCrash 的小闪存模式：BINDIR=TMPDIR，核心归档放内存，完全不占闪存。
+# 代价：每次重启后 ShellCrash 找不到归档，会重新下载内核。
+need_kb=$(( new_gz_size / 1024 + 2048 ))          # 归档大小 + 2MB 余量
+freed_kb=$(( old_core_size / 1024 / 2 ))          # ubifs 有透明压缩，保守按 2:1 估
+avail_after=$(( bindir_avail + freed_kb ))
+
+if [ "$avail_after" -lt "$need_kb" ]; then
+    warn "内核目录空间不足：删掉旧内核后预计可用 ${avail_after}KB，需要 ${need_kb}KB"
+    warn "将启用【小闪存模式】：核心归档改放 $TMPDIR_SC（内存），不占闪存"
+    warn "代价：每次重启后需重新下载内核（约 $((new_gz_size/1024/1024))MB）"
+    SMALL_FLASH=1
+    BINDIR="$TMPDIR_SC"
+    mkdir -p "$BINDIR"
+    info "内核目录已改为: $BINDIR"
+else
+    SMALL_FLASH=0
 fi
 
 # ---- 8. 生成 sing-box 配置（不切换内核，仅预生成并校验）----
@@ -413,6 +439,16 @@ else
     printf 'COMMAND="$TMPDIR/CrashCore run -D $BINDIR -C $TMPDIR/jsons"\n' >> "$CMDENV"
 fi
 ok "启动命令: $(grep '^COMMAND=' "$CMDENV")"
+
+# 小闪存模式下 BINDIR 也要指向内存，否则 ShellCrash 还会去闪存找归档
+if [ "$SMALL_FLASH" = 1 ]; then
+    if grep -q '^BINDIR=' "$CMDENV" 2>/dev/null; then
+        sed -i "s|^BINDIR=.*|BINDIR=$BINDIR|" "$CMDENV"
+    else
+        printf 'BINDIR=%s\n' "$BINDIR" >> "$CMDENV"
+    fi
+    ok "小闪存模式: BINDIR=$(grep '^BINDIR=' "$CMDENV" | cut -d= -f2)"
+fi
 
 # ---- 写 ShellCrash 配置 ----
 info "写入配置..."
