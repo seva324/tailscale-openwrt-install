@@ -43,12 +43,26 @@ jobs:
           cd src
           git log -1 --oneline
 
+      - name: Map arch -> GOARCH / GOARM
+        id: go
+        run: |
+          # 注意：Go 的 32 位 ARM 架构名是 arm（不是 armv7），靠 GOARM 指定版本
+          case "${{ inputs.goarch }}" in
+            armv7) echo "goarch=arm"   >> "$GITHUB_OUTPUT"; echo "goarm=7" >> "$GITHUB_OUTPUT" ;;
+            armv6) echo "goarch=arm"   >> "$GITHUB_OUTPUT"; echo "goarm=6" >> "$GITHUB_OUTPUT" ;;
+            arm64) echo "goarch=arm64" >> "$GITHUB_OUTPUT"; echo "goarm="  >> "$GITHUB_OUTPUT" ;;
+            amd64) echo "goarch=amd64" >> "$GITHUB_OUTPUT"; echo "goarm="  >> "$GITHUB_OUTPUT" ;;
+            386)   echo "goarch=386"   >> "$GITHUB_OUTPUT"; echo "goarm="  >> "$GITHUB_OUTPUT" ;;
+            *)     echo "goarch=${{ inputs.goarch }}" >> "$GITHUB_OUTPUT"; echo "goarm=" >> "$GITHUB_OUTPUT" ;;
+          esac
+
       - name: Build (CGO off, minimal tags)
         working-directory: src
         env:
           CGO_ENABLED: '0'
           GOOS: linux
-          GOARCH: ${{ inputs.goarch }}
+          GOARCH: ${{ steps.go.outputs.goarch }}
+          GOARM: ${{ steps.go.outputs.goarm }}
         run: |
           set -eux
           go build -trimpath \
