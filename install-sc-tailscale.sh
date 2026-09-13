@@ -187,12 +187,12 @@ if [ "$LIBC" = "musl" ]; then SB_FLAVOR="musl"; else SB_FLAVOR="glibc"; fi
 info "架构: $ARCH  ->  sing-box linux-$SB_ARCH-$SB_FLAVOR"
 
 # ---- 2. 空间检查 ----
-# 峰值占用：下载包 + 解压后的裸二进制（最小版 .gz 约 18MB→45MB；官方 tar.gz 28MB→86MB）
-need_kb=102400     # 100MB：够最小版流程；官方 tar.gz 流程会在解压前再精确校验一次
+# 峰值占用：下载包 + 解压后的裸二进制（最小版 19MB→55MB，峰值约 75MB；官方 tar.gz 更大）
+need_kb=98304      # 96MB：够最小版流程；官方 tar.gz 流程会在解压前再精确校验一次
 tmp_avail=$(df -P "$TMPDIR_SC" 2>/dev/null | awk 'NR==2{print $4}')
 case "$tmp_avail" in ''|*[!0-9]*) tmp_avail=$(df -P /tmp 2>/dev/null | awk 'NR==2{print $4}') ;; esac
 case "$tmp_avail" in ''|*[!0-9]*) tmp_avail=0 ;; esac
-[ "$tmp_avail" -lt "$need_kb" ] && die "临时目录空间不足：需要约 $((need_kb/1024))MB，实际 $((tmp_avail/1024))MB（可清理 $TMPDIR_SC 下的旧文件）"
+[ "$tmp_avail" -lt "$need_kb" ] && die "临时目录空间不足：需要约 $((need_kb/1024))MB，实际 $((tmp_avail/1024))MB（可删 $WORKDIR 和 $TMPDIR_SC 下的旧文件后重试）"
 
 bindir_avail=$(df -P "$BINDIR" 2>/dev/null | awk 'NR==2{print $4}')
 case "$bindir_avail" in ''|*[!0-9]*) bindir_avail=0 ;; esac
@@ -351,6 +351,10 @@ else
     gzip -c "$SB_BIN" > "$SB_GZ" || die "压缩失败"
 fi
 new_gz_size=$(wc -c < "$SB_GZ")
+
+# 校验通过后就不再需要解压出来的裸二进制了（50MB 级别，留着会把 /tmp 挤爆，
+# 特别是小闪存模式的机器 —— 归档本身就放在 /tmp）
+rm -rf "$WORKDIR/x"
 info "压缩后大小: $((new_gz_size/1024/1024))MB"
 
 # ---- 闪存装不下就降级到"小闪存模式" ----
