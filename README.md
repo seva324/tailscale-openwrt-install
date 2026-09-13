@@ -12,6 +12,9 @@
 | 适用 | 空间充裕的设备 | **空间紧张、已装 ShellCrash 的路由器** |
 | 子网路由 / 出口节点 | 支持 | 支持 |
 
+> **不想跑脚本、想全用 ShellCrash 自带菜单装？** 看 [MANUAL-INSTALL.md](MANUAL-INSTALL.md) —— 一份逐步清单，
+> 包含菜单路径、内核 URL、必须改的配置项和排错对照表。
+
 ---
 
 ## 方案 B：ShellCrash + sing-box（推荐给空间紧张的路由器）
