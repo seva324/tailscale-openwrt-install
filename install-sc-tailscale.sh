@@ -138,17 +138,25 @@ if [ "$MODE" = "status" ]; then
 fi
 
 # ---------------- rollback ----------------
-if [ "$MODE" = "rollback" ]; then
-    [ -d "$BACKUP_ROOT" ] || die "没有找到备份目录 $BACKUP_ROOT（可能未执行过安装，或已重启过路由器）"
+do_rollback() {
+    [ -d "$BACKUP_ROOT" ] || { err "没有找到备份目录 $BACKUP_ROOT（可能未执行过安装）"; return 1; }
     info "从 $BACKUP_ROOT 回滚..."
     /etc/init.d/shellcrash stop 2>/dev/null || "$CRASHDIR"/start.sh stop 2>/dev/null
     [ -f "$BACKUP_ROOT/ShellCrash.cfg" ] && cp -f "$BACKUP_ROOT/ShellCrash.cfg" "$CFG"
     [ -f "$BACKUP_ROOT/gateway.cfg" ] && cp -f "$BACKUP_ROOT/gateway.cfg" "$CRASHDIR/configs/gateway.cfg"
-    [ -d "$BACKUP_ROOT/ys" ] && rm -rf "$CRASHDIR/jsons" && cp -rf "$BACKUP_ROOT/ys" "$CRASHDIR/jsons"
     [ -f "$BACKUP_ROOT/command.env" ] && cp -f "$BACKUP_ROOT/command.env" "$CRASHDIR/configs/command.env"
-    [ -f "$BACKUP_ROOT/core" ] && { rm -f "$BINDIR"/CrashCore.*; cp -f "$BACKUP_ROOT/core" "$BINDIR/$(basename "$BACKUP_ROOT/core")"; }
+    [ -d "$BACKUP_ROOT/ys" ] && { rm -rf "$CRASHDIR/jsons"; cp -rf "$BACKUP_ROOT/ys" "$CRASHDIR/jsons"; }
+    if [ -f "$BACKUP_ROOT/core" ]; then
+        rm -f "$BINDIR"/CrashCore.*
+        cp -f "$BACKUP_ROOT/core" "$BINDIR/$(basename "$BACKUP_ROOT/core")"
+    fi
+    sleep 1
     /etc/init.d/shellcrash start 2>/dev/null || "$CRASHDIR"/start.sh start 2>/dev/null
-    ok "回滚完成。建议手动确认：sh $0 --status"
+    return 0
+}
+
+if [ "$MODE" = "rollback" ]; then
+    do_rollback && ok "回滚完成。建议手动确认：sh $0 --status"
     exit 0
 fi
 
@@ -458,9 +466,21 @@ sleep 2
 # ---- 安装内核 ----
 info "安装内核..."
 rm -f "$BINDIR"/CrashCore.raw "$BINDIR"/CrashCore.gz "$BINDIR"/CrashCore.upx "$BINDIR"/CrashCore.tar.gz
-cp -f "$SB_GZ" "$BINDIR/CrashCore.gz"
+if ! cp -f "$SB_GZ" "$BINDIR/CrashCore.gz" 2>/dev/null || [ ! -s "$BINDIR/CrashCore.gz" ]; then
+    err "写入内核失败（闪存空间不足？）"
+    err "正在自动回滚…"
+    do_rollback
+    exit 1
+fi
+_p=$(wc -c "$SB_GZ" 2>/dev/null | awk '{print $1}')
+_q=$(wc -c "$BINDIR/CrashCore.gz" 2>/dev/null | awk '{print $1}')
+if [ "${_p:-0}" != "${_q:-x}" ]; then
+    err "内核写入不完整（源 ${_p:-?} vs 目标 ${_q:-?}），正在自动回滚…"
+    do_rollback
+    exit 1
+fi
 rm -f "$TMPDIR_SC/CrashCore"
-ok "内核已就位: $BINDIR/CrashCore.gz"
+ok "内核已就位: $BINDIR/CrashCore.gz（$(( _q / 1024 / 1024 ))MB，完整性已校验）"
 
 # ---- 更新启动命令（关键）----
 # command.env 里默认是 mihomo 的参数（-d BINDIR -f config.yaml）。
@@ -565,7 +585,14 @@ ok "配置写入完成"
 # ---- 启动 ----
 info "启动 ShellCrash..."
 /etc/init.d/shellcrash start 2>/dev/null || "$CRASHDIR"/start.sh start 2>/dev/null
-sleep 8
+
+# 等内核起来（最多 30 秒）——避免慢启动被误判为失败而触发回滚
+_waited=0
+while [ "$_waited" -lt 30 ]; do
+    sleep 5
+    _waited=$((_waited + 5))
+    [ -n "$(pidof CrashCore 2>/dev/null)" ] && break
+done
 
 if [ -n "$(pidof CrashCore 2>/dev/null)" ]; then
     ok "CrashCore 已运行"
@@ -581,9 +608,12 @@ if [ -n "$(pidof CrashCore 2>/dev/null)" ]; then
         fi
     fi
 else
-    err "CrashCore 未能启动！"
-    err "请查看日志：$TMPDIR_SC/ShellCrash.log"
-    err "回滚：sh $0 --rollback"
+    err "CrashCore 在 30 秒内没有起来 —— 新内核或新配置有问题。"
+    err "正在【自动回滚】。这一步很关键：不这么做的话，防火墙规则可能已经把"
+    err "局域网流量打进黑洞，而远程就再也连不进来了。"
+    do_rollback
+    say ""
+    err "已回滚到安装前状态。排查日志：$TMPDIR_SC/ShellCrash.log 与 $CRASHDIR/debug.log"
     exit 1
 fi
 
